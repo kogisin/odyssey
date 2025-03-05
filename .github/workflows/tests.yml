@@ -49,7 +49,6 @@ jobs:
         with:
           files: |
             **/*
-            !**/*.min.js
             !**/*.json
             !**/*.lock
             !**/*.bin
