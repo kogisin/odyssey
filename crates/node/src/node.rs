@@ -4,32 +4,38 @@
 //! required for the optimism engine API.
 
 use op_alloy_consensus::OpPooledTransaction;
-use reth_network::{
-    transactions::{TransactionPropagationMode, TransactionsManagerConfig},
-    NetworkHandle, NetworkManager, PeersInfo,
-};
 use reth_network_types::ReputationChangeWeights;
-use reth_node_api::{FullNodeTypes, TxTy};
-use reth_node_builder::{
-    components::{
-        BasicPayloadServiceBuilder, ComponentsBuilder, NetworkBuilder, PoolBuilderConfigOverrides,
+use reth_op::{
+    chainspec::OpChainSpec,
+    network::{
+        transactions::{
+            config::TransactionPropagationKind, TransactionPropagationMode,
+            TransactionsManagerConfig,
+        },
+        NetworkHandle, NetworkManager, PeersInfo,
     },
-    BuilderContext, Node, NodeAdapter, NodeComponentsBuilder, NodeTypes,
-};
-use reth_optimism_chainspec::OpChainSpec;
-use reth_optimism_node::{
-    args::RollupArgs,
     node::{
-        OpAddOns, OpConsensusBuilder, OpExecutorBuilder, OpNetworkBuilder, OpPayloadBuilder,
-        OpPoolBuilder, OpStorage,
+        api::{FullNodeTypes, TxTy},
+        args::RollupArgs,
+        builder::{
+            components::{
+                BasicPayloadServiceBuilder, ComponentsBuilder, NetworkBuilder,
+                PoolBuilderConfigOverrides,
+            },
+            BuilderContext, Node, NodeAdapter, NodeComponentsBuilder, NodeTypes,
+        },
+        node::{
+            OpAddOns, OpConsensusBuilder, OpExecutorBuilder, OpNetworkBuilder, OpPayloadBuilder,
+            OpPoolBuilder,
+        },
+        rpc::OpEngineApiBuilder,
+        OpEngineTypes, OpEngineValidatorBuilder, OpNetworkPrimitives, OpStorage,
     },
-    OpEngineTypes, OpNetworkPrimitives,
+    pool::{PoolTransaction, SubPoolLimit, TransactionPool, TXPOOL_MAX_ACCOUNT_SLOTS_PER_SENDER},
+    OpPrimitives,
 };
 use reth_optimism_payload_builder::config::OpDAConfig;
-use reth_optimism_primitives::OpPrimitives;
-use reth_transaction_pool::{
-    PoolTransaction, SubPoolLimit, TransactionPool, TXPOOL_MAX_ACCOUNT_SLOTS_PER_SENDER,
-};
+use reth_optimism_rpc::eth::OpEthApiBuilder;
 use reth_trie_db::MerklePatriciaTrie;
 use std::time::Duration;
 use tracing::info;
@@ -44,7 +50,7 @@ pub struct OdysseyNode {
     /// Used to throttle the size of the data availability payloads (configured by the batcher via
     /// the `miner_` api).
     ///
-    /// By default no throttling is applied.
+    /// By default, no throttling is applied.
     pub da_config: OpDAConfig,
 }
 
@@ -92,19 +98,20 @@ impl OdysseyNode {
             max_account_slots: Some(TXPOOL_MAX_ACCOUNT_SLOTS_PER_SENDER * 2),
             ..Default::default()
         };
+        let payload_builder = BasicPayloadServiceBuilder::new(
+            OpPayloadBuilder::new(compute_pending_block).with_da_config(self.da_config.clone()),
+        );
 
         ComponentsBuilder::default()
             .node_types::<Node>()
             .pool(pool_builder)
-            .payload(BasicPayloadServiceBuilder::new(
-                OpPayloadBuilder::new(compute_pending_block).with_da_config(self.da_config.clone()),
-            ))
+            .executor(OpExecutorBuilder::default())
+            .payload(payload_builder)
+            .consensus(OpConsensusBuilder::default())
             .network(OdysseyNetworkBuilder::new(OpNetworkBuilder {
                 disable_txpool_gossip,
                 disable_discovery_v4: !discovery_v4,
             }))
-            .executor(OpExecutorBuilder::default())
-            .consensus(OpConsensusBuilder::default())
     }
 }
 
@@ -137,8 +144,12 @@ where
         OpConsensusBuilder,
     >;
 
-    type AddOns =
-        OpAddOns<NodeAdapter<N, <Self::ComponentsBuilder as NodeComponentsBuilder<N>>::Components>>;
+    type AddOns = OpAddOns<
+        NodeAdapter<N, <Self::ComponentsBuilder as NodeComponentsBuilder<N>>::Components>,
+        OpEthApiBuilder,
+        OpEngineValidatorBuilder,
+        OpEngineApiBuilder<OpEngineValidatorBuilder>,
+    >;
 
     fn components_builder(&self) -> Self::ComponentsBuilder {
         Self::components(self)
@@ -146,7 +157,7 @@ where
 
     fn add_ons(&self) -> Self::AddOns {
         Self::AddOns::builder()
-            .with_sequencer(self.args.sequencer_http.clone())
+            .with_sequencer(self.args.sequencer.clone())
             .with_da_config(self.da_config.clone())
             .with_enable_tx_conditional(self.args.enable_tx_conditional)
             .build()
@@ -177,15 +188,15 @@ where
         > + Unpin
         + 'static,
 {
-    type Primitives = OpNetworkPrimitives;
+    type Network = NetworkHandle<OpNetworkPrimitives>;
 
     async fn build_network(
         self,
         ctx: &BuilderContext<Node>,
         pool: Pool,
-    ) -> eyre::Result<NetworkHandle<Self::Primitives>> {
+    ) -> eyre::Result<Self::Network> {
         let mut network_config = self.inner.network_config(ctx)?;
-        // this is rolled with limited trusted peers and we want ignore any reputation slashing
+        // this is rolled with limited trusted peers, and we want to ignore any reputation slashing
         network_config.peers_config.reputation_weights = ReputationChangeWeights::zero();
         network_config.peers_config.backoff_durations.low = Duration::from_secs(5);
         network_config.peers_config.backoff_durations.medium = Duration::from_secs(5);
@@ -194,12 +205,13 @@ where
         network_config.sessions_config.session_command_buffer = 500;
         network_config.sessions_config.session_event_buffer = 500;
 
-        let txconfig = TransactionsManagerConfig {
+        let tx_config = TransactionsManagerConfig {
             propagation_mode: TransactionPropagationMode::All,
             ..network_config.transactions_manager_config.clone()
         };
         let network = NetworkManager::<OpNetworkPrimitives>::builder(network_config).await?;
-        let handle = ctx.start_network_with(network, pool, txconfig);
+        let handle =
+            ctx.start_network_with(network, pool, tx_config, TransactionPropagationKind::default());
         info!(target: "reth::cli", enode=%handle.local_node_record(), "P2P networking initialized");
         Ok(handle)
     }

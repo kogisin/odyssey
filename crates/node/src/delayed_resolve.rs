@@ -8,7 +8,7 @@ use jsonrpsee::{
 };
 use parking_lot::Mutex;
 use reth_chain_state::CanonStateNotification;
-use reth_optimism_primitives::OpPrimitives;
+use reth_op::OpPrimitives;
 use serde::de::Error;
 use serde_json::value::RawValue;
 use std::{
@@ -84,7 +84,7 @@ impl DelayedResolver {
                         MethodsError::JsonRpc(err) => err,
                         err => ErrorObject::owned(
                             INVALID_PARAMS_CODE,
-                            format!("invalid payload call: {:?}", err),
+                            format!("invalid payload call: {err:?}"),
                             None::<()>,
                         ),
                     })
@@ -116,7 +116,7 @@ impl ToRpcParams for PayloadParam {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_rpc_types::engine::PayloadId;
+    use alloy_rpc_types_engine::PayloadId;
 
     /// Mocked payload object
     #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]

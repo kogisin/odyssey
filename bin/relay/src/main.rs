@@ -12,7 +12,6 @@ use jsonrpsee::server::Server;
 use odyssey_wallet::{AlloyUpstream, OdysseyWallet, OdysseyWalletApiServer};
 use reth_tracing::Tracer;
 use std::net::{IpAddr, Ipv4Addr};
-use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use url::Url;
@@ -45,7 +44,7 @@ impl Args {
         let signer: PrivateKeySigner = self.secret_key.parse().wrap_err("Invalid signing key")?;
         let wallet = EthereumWallet::from(signer);
         let rpc_client = RpcClient::new_http(self.upstream);
-        let provider = ProviderBuilder::new().wallet(wallet).on_client(rpc_client);
+        let provider = ProviderBuilder::new().wallet(wallet).connect_client(rpc_client);
 
         // get chain id
         let chain_id = provider.get_chain_id().await?;
@@ -58,12 +57,12 @@ impl Args {
             .allow_methods([Method::POST])
             .allow_origin(Any)
             .allow_headers([hyper::header::CONTENT_TYPE]);
+        let middleware = tower::ServiceBuilder::new().layer(cors);
         let server = Server::builder()
-            .http_only()
-            .set_http_middleware(ServiceBuilder::new().layer(cors))
+            .set_http_middleware(middleware)
             .build((self.address, self.port))
             .await?;
-        info!(addr = ?server.local_addr().unwrap(), "Started relay service");
+        info!(addr = ?server.local_addr()?, "Started relay service");
 
         let handle = server.start(rpc);
         handle.stopped().await;
@@ -77,7 +76,9 @@ impl Args {
 async fn main() {
     // Enable backtraces unless a RUST_BACKTRACE value has already been explicitly provided.
     if std::env::var_os("RUST_BACKTRACE").is_none() {
-        std::env::set_var("RUST_BACKTRACE", "1");
+        unsafe {
+            std::env::set_var("RUST_BACKTRACE", "1");
+        }
     }
 
     let args = Args::parse();
