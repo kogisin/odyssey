@@ -11,7 +11,7 @@
 
 Odyssey is a testnet OP Stack rollup aimed at enabling experimentation of bleeding edge Ethereum Research.
 Odyssey is **not** a fork of reth.
-Odyssey implements traits provided by the [reth node builder API](https://paradigmxyz.github.io/reth/docs/reth_node_builder/index.html), allowing implementation of precompiles and instructions of experimental EIPs without forking the node.
+Odyssey implements traits provided by the [reth node builder API](https://reth.rs/developers/exex/hello-world.html), allowing implementation of precompiles and instructions of experimental EIPs without forking the node.
 
 Specifically, Odyssey currently implements the following EIPs:
 
